@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mirror</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #000;
+    overflow: hidden;
+    width: 100vw;
+    height: 100vh;
+    cursor: none;
+  }
+
+  canvas#display {
+    width: 100vw;
+    height: 100vh;
+    object-fit: cover;
+    filter: grayscale(1) contrast(1.08);
+    opacity: 0;
+    transition: opacity 1.8s ease-in;
+  }
+
+  canvas#display.live {
+    opacity: 1;
+  }
+
+  #countdown {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    transition: opacity 1.5s ease-out;
+  }
+
+  #countdown.hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  #countdown span {
+    font-family: 'Courier New', monospace;
+    font-size: 1.2rem;
+    letter-spacing: 0.15em;
+    color: #333;
+    font-weight: 300;
+  }
+
+  video { display: none; }
+  canvas#capture { display: none; }
+</style>
+</head>
+<body>
+
+<video id="cam" autoplay muted playsinline></video>
+<canvas id="capture"></canvas>
+<canvas id="display"></canvas>
+
+<div id="countdown">
+  <span id="timer"></span>
+</div>
+
+<script>
+(async () => {
+  const DELAY_SECONDS = 60;
+  const FPS = 15;
+  const JPEG_QUALITY = 0.75;
+  const INTERVAL = 1000 / FPS;
+
+  const cam = document.getElementById('cam');
+  const captureCanvas = document.getElementById('capture');
+  const captureCtx = captureCanvas.getContext('2d');
+  const display = document.getElementById('display');
+  const displayCtx = display.getContext('2d');
+  const countdown = document.getElementById('countdown');
+  const timer = document.getElementById('timer');
+
+  const buffer = [];
+  const totalFrames = DELAY_SECONDS * FPS;
+  let frameCount = 0;
+  let started = false;
+
+  // Request camera
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        facingMode: 'user'
+      },
+      audio: false
+    });
+  } catch (e) {
+    timer.textContent = 'camera required';
+    return;
+  }
+
+  cam.srcObject = stream;
+  await cam.play();
+
+  const vw = cam.videoWidth;
+  const vh = cam.videoHeight;
+  captureCanvas.width = vw;
+  captureCanvas.height = vh;
+
+  // Display canvas matches viewport aspect with cover behavior
+  function sizeDisplay() {
+    display.width = window.innerWidth;
+    display.height = window.innerHeight;
+  }
+  sizeDisplay();
+  window.addEventListener('resize', sizeDisplay);
+
+  // Draw with "cover" scaling
+  function drawCover(ctx, img, imgW, imgH) {
+    const cw = ctx.canvas.width;
+    const ch = ctx.canvas.height;
+    const scale = Math.max(cw / imgW, ch / imgH);
+    const sw = cw / scale;
+    const sh = ch / scale;
+    const sx = (imgW - sw) / 2;
+    const sy = (imgH - sh) / 2;
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, cw, ch);
+  }
+
+  // Capture frame as compressed blob
+  function captureFrame() {
+    captureCtx.drawImage(cam, 0, 0, vw, vh);
+    return new Promise(resolve => {
+      captureCanvas.toBlob(blob => resolve(blob), 'image/jpeg', JPEG_QUALITY);
+    });
+  }
+
+  // Display a blob on the output canvas
+  async function displayFrame(blob) {
+    const bitmap = await createImageBitmap(blob);
+    drawCover(displayCtx, bitmap, bitmap.width, bitmap.height);
+    bitmap.close();
+  }
+
+  // Update countdown
+  function updateCountdown() {
+    const remaining = Math.max(0, DELAY_SECONDS - Math.floor(frameCount / FPS));
+    timer.textContent = remaining;
+  }
+
+  // Main loop
+  let lastTime = 0;
+
+  async function loop(timestamp) {
+    requestAnimationFrame(loop);
+
+    if (timestamp - lastTime < INTERVAL) return;
+    lastTime = timestamp;
+
+    const blob = await captureFrame();
+    buffer.push(blob);
+    frameCount++;
+
+    if (!started) {
+      updateCountdown();
+
+      if (frameCount >= totalFrames) {
+        started = true;
+        countdown.classList.add('hidden');
+        display.classList.add('live');
+      }
+    }
+
+    if (started && buffer.length > totalFrames) {
+      const old = buffer.shift();
+      await displayFrame(old);
+    }
+  }
+
+  requestAnimationFrame(loop);
+})();
+</script>
+
+</body>
+</html>
